@@ -1,0 +1,17 @@
+#!/bin/sh
+# Minimal Maven wrapper: downloads the Maven version in .mvn/wrapper/maven-wrapper.properties on first use.
+set -e
+BASE_DIR=$(cd "$(dirname "$0")" && pwd)
+URL=$(sed -n 's/^distributionUrl=//p' "$BASE_DIR/.mvn/wrapper/maven-wrapper.properties" | tr -d '\r')
+NAME=$(basename "$URL" -bin.tar.gz)
+DIST_DIR="${MAVEN_USER_HOME:-$HOME/.m2}/wrapper/dists/$NAME"
+MVN="$DIST_DIR/$NAME/bin/mvn"
+if [ ! -x "$MVN" ]; then
+  echo "Downloading $URL" >&2
+  mkdir -p "$DIST_DIR"
+  TMP="$DIST_DIR/download.tar.gz"
+  if command -v curl >/dev/null 2>&1; then curl -fsSL "$URL" -o "$TMP"; else wget -q "$URL" -O "$TMP"; fi
+  tar -xzf "$TMP" -C "$DIST_DIR"
+  rm -f "$TMP"
+fi
+exec "$MVN" "$@"
