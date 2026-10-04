@@ -1,181 +1,162 @@
-# Cloud Task Manager
+# Cloud Task Manager (Event-Driven Architecture with Apache Kafka)
 
-A small full-stack task manager built to be deployed to the cloud: React + Spring Boot + PostgreSQL, containerised with Docker, tested and built by GitHub Actions, deployable to a single AWS EC2 instance.
+A full-stack task manager application enhanced with an **Apache Kafka event-driven pipeline**: React + Nginx + Spring Boot + Apache Kafka + PostgreSQL, fully containerised with Docker Compose and tested via GitHub Actions.
 
-## Features
-Create, list, view-by-ID, update, delete and search (by title) tasks. Each task has `id`, `title`, `description`, `status` (`TODO`, `IN_PROGRESS`, `COMPLETED`) and `createdAt`.
+## Assignment Demonstration & Core Concepts
+This project demonstrates key principles of **Event-Driven Thinking** and modern distributed system patterns:
+- **Distributed Communication**: Decoupled asynchronous event delivery using Apache Kafka.
+- **Message Passing & Delivery**: Structured JSON event payloads published to Kafka topics.
+- **Event-Driven Architecture**: Task mutations (Create, Update, Delete) produce audit events asynchronously without blocking synchronous HTTP REST API responses.
+- **Kafka Producer/Consumer Pattern**: In-process Spring Kafka Producer publishes events to topic `task-events`, consumed by a Kafka Consumer logger/processor.
+- **Containerization**: Single-command local dev environment using Docker Compose containing `frontend`, `backend`, `kafka` (KRaft mode), and `postgres`.
 
-## Tech stack
+---
+
+## Tech Stack
 | Layer | Technology |
 |---|---|
 | Frontend | React 18, Vite 5, Axios, served by Nginx in production |
-| Backend | Java 17, Spring Boot 3.3, Spring Web, Spring Data JPA, Bean Validation, Maven |
-| Database | PostgreSQL 16 (H2 in-memory for tests only) |
-| DevOps | Docker (multi-stage), Docker Compose, GitHub Actions, AWS EC2 |
+| Backend | Java 17/25, Spring Boot 3.3, Spring Web, Spring Data JPA, Spring Kafka, Maven |
+| Messaging | Apache Kafka 3.7 (KRaft mode, single-node) |
+| Database | PostgreSQL 16 (H2 in-memory for unit tests) |
+| DevOps | Docker (multi-stage), Docker Compose, GitHub Actions |
 
-## Architecture
+---
+
+## System Architecture
 
 ```mermaid
 flowchart LR
-    U[User Browser] -->|HTTP :80| FE[Nginx + React build<br/>container]
-    U -->|REST /api/tasks :8080| BE[Spring Boot API<br/>container]
-    BE -->|JDBC :5432| DB[(PostgreSQL<br/>container or RDS)]
-    GH[GitHub Actions CI] -.->|test + build on push/PR| REPO[(GitHub repo)]
-    subgraph EC2[AWS EC2 instance - Docker Compose]
-      FE
-      BE
-      DB
-    end
+    A[React Frontend] --> B[Nginx]
+    B --> C[Spring Boot REST API]
+    C --> D[Kafka Producer]
+    D --> E[(Kafka Topic: task-events)]
+    E --> F[Kafka Consumer]
+    F --> G[(PostgreSQL)]
 ```
 
-The React app runs in the browser and calls the API directly, so `VITE_API_BASE_URL` must be a URL the **browser** can reach, and the backend must allow the frontend's origin via `CORS_ALLOWED_ORIGINS`.
+### Event Flow Scenario
+1. **User Action**: User creates, updates, or deletes a task in the React frontend.
+2. **REST Request**: Nginx routes the HTTP request to Spring Boot (`/api/tasks`).
+3. **Database CRUD**: Task state is synchronously saved/updated/deleted in PostgreSQL.
+4. **Kafka Event Publishing**: Spring Boot `TaskEventProducer` packages event metadata and publishes a JSON message to Kafka topic `task-events`.
+5. **Kafka Processing**: `TaskEventConsumer` receives the event asynchronously from `task-events` and logs/processes it.
 
-## Folder structure
-```
-cloud-task-manager/
-├── backend/                 Spring Boot API (pom.xml, Dockerfile, src/)
-│   └── src/test/            H2-based tests (profile "test")
-├── frontend/                React + Vite app (Dockerfile, nginx.conf, src/)
-├── docker-compose.yml       db + backend + frontend
-├── .env.example             template for Compose variables
-└── .github/workflows/ci.yml GitHub Actions pipeline
+---
+
+## Kafka Events Specification
+
+Topic Name: `task-events`
+
+### Supported Events
+- `TaskCreated`: Fired upon task creation (`POST /api/tasks`)
+- `TaskUpdated`: Fired upon task update (`PUT /api/tasks/{id}`)
+- `TaskDeleted`: Fired upon task deletion (`DELETE /api/tasks/{id}`)
+
+### Event Payload Schema (JSON)
+```json
+{
+  "eventType": "TaskCreated",
+  "taskId": 1,
+  "title": "Write quarterly report",
+  "status": "TODO",
+  "timestamp": "2026-10-04T20:30:00Z",
+  "details": "Task created via API"
+}
 ```
 
-## Environment variables
-**Backend**
+---
+
+## Environment Variables
+
 | Variable | Purpose | Default |
 |---|---|---|
-| `SPRING_DATASOURCE_URL` | JDBC URL | *required* |
-| `SPRING_DATASOURCE_USERNAME` | DB user | *required* |
-| `SPRING_DATASOURCE_PASSWORD` | DB password | *required* |
-| `SERVER_PORT` | API port | `8080` |
-| `CORS_ALLOWED_ORIGINS` | Comma-separated allowed origins | *required* |
+| `POSTGRES_DB` | PostgreSQL database name | `taskdb` |
+| `POSTGRES_USER` | PostgreSQL user | `taskuser` |
+| `POSTGRES_PASSWORD` | PostgreSQL password | `change-me` |
+| `SPRING_KAFKA_BOOTSTRAP_SERVERS` | Kafka broker host:port | `kafka:9092` |
+| `KAFKA_TOPIC` | Kafka topic for task events | `task-events` |
+| `SERVER_PORT` | Backend port | `8080` |
+| `CORS_ALLOWED_ORIGINS` | CORS allowed origins | `http://localhost` |
+| `VITE_API_BASE_URL` | Frontend API endpoint | `http://localhost:8080` |
 
-**Frontend** (build time): `VITE_API_BASE_URL` – backend base URL without `/api`, e.g. `http://localhost:8080`.
+---
 
-**Compose** (`.env`): `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, `CORS_ALLOWED_ORIGINS`, `VITE_API_BASE_URL`.
-
-## API
-| Method | Path | Description |
-|---|---|---|
-| POST | `/api/tasks` | Create (201) |
-| GET | `/api/tasks` | List all |
-| GET | `/api/tasks/{id}` | Get one (404 if missing) |
-| PUT | `/api/tasks/{id}` | Update |
-| DELETE | `/api/tasks/{id}` | Delete (204) |
-| GET | `/api/tasks/search?title=...` | Case-insensitive partial title search |
-
-Body: `{"title":"Write report","description":"...","status":"TODO"}` (`title` required; `status` defaults to `TODO`).
-
-## Local setup (without Docker)
-Prerequisites: JDK 17, Maven 3.9+, Node 20+, PostgreSQL.
-
-**Maven wrapper**: `backend/mvnw` is a small script that downloads Maven 3.9.9 on first use (needs `curl` or `wget`; on Windows use Git Bash or WSL). No separate Maven install is needed.
-
-**Database**
-```bash
-psql -U postgres -c "CREATE USER taskuser WITH PASSWORD 'change-me';"
-psql -U postgres -c "CREATE DATABASE taskdb OWNER taskuser;"
+## Folder Structure
+```
+cloud-task-manager/
+├── backend/                 Spring Boot API + Kafka Producer/Consumer
+│   ├── src/main/java/       Task REST Controller, Service, JPA Entity, Kafka Event Producer & Consumer
+│   └── src/test/java/       JUnit 5 unit tests (MockMvc, TaskEventProducerTest, TaskEventConsumerTest)
+├── frontend/                React + Vite UI served via Nginx
+├── docker-compose.yml       Orchestrates postgres, kafka, backend, and frontend
+├── .env.example             Template for environment variables
+└── README.md                Documentation & Architecture Overview
 ```
 
-**Run backend**
+---
+
+## Running locally with Docker Compose
+
+1. **Copy Environment Variables**:
+   ```bash
+   cp .env.example .env
+   ```
+
+2. **Start All Services**:
+   ```bash
+   docker compose up -d --build
+   ```
+
+3. **Verify Container Health**:
+   ```bash
+   docker compose ps
+   ```
+
+4. **Access Applications**:
+   - **Frontend UI**: `http://localhost`
+   - **Backend API**: `http://localhost:8080/api/tasks`
+
+---
+
+## How to Verify Kafka Events
+
+### Option A: Inspect Backend Container Logs
+Create, update, or delete a task through the frontend or `curl`:
+```bash
+curl -X POST http://localhost:8080/api/tasks \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test Kafka Pipeline","description":"Verification task","status":"TODO"}'
+```
+
+View the live backend logs to observe both Producer and Consumer activity:
+```bash
+docker compose logs -f backend
+```
+
+**Expected Log Output**:
+```text
+[KAFKA PRODUCER] Published TaskCreated event: taskId=1
+[KAFKA CONSUMER] Received TaskCreated event: taskId=1
+[KAFKA CONSUMER] Event Payload: title="Test Kafka Pipeline", status=TODO, timestamp=2026-10-04T20:45:00Z, details="Task created via API"
+```
+
+### Option B: Read Messages Directly from Kafka Container
+Execute `kafka-console-consumer` inside the Kafka container:
+```bash
+docker exec -it task-kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  --bootstrap-server localhost:9092 \
+  --topic task-events \
+  --from-beginning
+```
+
+---
+
+## Running Unit Tests Locally
+
 ```bash
 cd backend
-export SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/taskdb
-export SPRING_DATASOURCE_USERNAME=taskuser
-export SPRING_DATASOURCE_PASSWORD=change-me
-export CORS_ALLOWED_ORIGINS=http://localhost:5173
-./mvnw spring-boot:run          # http://localhost:8080/api/tasks
+./mvnw test
 ```
 
-**Run frontend**
-```bash
-cd frontend
-cp .env.example .env
-npm install
-npm run dev                     # http://localhost:5173
-```
-
-## Run tests
-```bash
-cd backend && ./mvnw test
-```
-Tests use an in-memory H2 database via `application-test.yml` (`@ActiveProfiles("test")`), so no PostgreSQL is needed.
-
-## Docker
-**Everything with Compose (recommended)**
-```bash
-cp .env.example .env            # edit the password
-docker compose up -d --build
-# Frontend: http://localhost   API: http://localhost:8080/api/tasks
-docker compose logs -f backend
-docker compose down             # add -v to also delete DB data
-```
-
-**Build images individually**
-```bash
-docker build -t task-backend ./backend
-docker build -t task-frontend --build-arg VITE_API_BASE_URL=http://localhost:8080 ./frontend
-```
-
-**Run containers individually**
-```bash
-docker network create taskNet
-docker run -d --name db --network taskNet -e POSTGRES_DB=taskdb -e POSTGRES_USER=taskuser \
-  -e POSTGRES_PASSWORD=change-me -v pgdata:/var/lib/postgresql/data postgres:16-alpine
-docker run -d --name backend --network taskNet -p 8080:8080 \
-  -e SPRING_DATASOURCE_URL=jdbc:postgresql://db:5432/taskdb \
-  -e SPRING_DATASOURCE_USERNAME=taskuser -e SPRING_DATASOURCE_PASSWORD=change-me \
-  -e SERVER_PORT=8080 -e CORS_ALLOWED_ORIGINS=http://localhost task-backend   # replace with your frontend origin
-docker run -d --name frontend -p 80:80 task-frontend
-```
-
-## GitHub Actions CI
-`.github/workflows/ci.yml` runs on every push and pull request with two jobs:
-1. **backend** – checkout, Java 17 (Temurin, Maven cache), `mvn -B verify` (compiles and runs all tests).
-2. **frontend** – checkout, Node 20, `npm install`, `npm run build`.
-
-A failing test or build fails the workflow.
-
-## Deploy to AWS EC2
-
-The simplest reliable setup is one EC2 instance running all three containers with Docker Compose.
-
-1. **Launch instance**: Amazon Linux 2023, `t3.small` (2 GB RAM recommended; `t2.micro` may be too small for the Maven build), 20 GB disk, create/download a key pair.
-2. **Security group** inbound rules: SSH 22 (*My IP* only), HTTP 80 (anywhere), Custom TCP 8080 (anywhere). **Do not open 5432.**
-3. **Connect and install Docker**
-   ```bash
-   ssh -i key.pem ec2-user@<EC2_PUBLIC_IP>
-   sudo dnf install -y docker git
-   sudo systemctl enable --now docker
-   sudo usermod -aG docker ec2-user
-   sudo mkdir -p /usr/local/lib/docker/cli-plugins
-   sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
-     -o /usr/local/lib/docker/cli-plugins/docker-compose
-   sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-   exit    # log back in so the docker group applies
-   ```
-4. **Get the code and configure**
-   ```bash
-   git clone https://github.com/<you>/cloud-task-manager.git && cd cloud-task-manager
-   cp .env.example .env && nano .env
-   ```
-   Set `POSTGRES_PASSWORD` to a strong value, `CORS_ALLOWED_ORIGINS=http://<EC2_PUBLIC_IP>` and `VITE_API_BASE_URL=http://<EC2_PUBLIC_IP>:8080`.
-5. **Start**: `docker compose up -d --build`
-6. **Verify**: open `http://<EC2_PUBLIC_IP>` and `http://<EC2_PUBLIC_IP>:8080/api/tasks`.
-
-**Using AWS RDS PostgreSQL instead of the DB container**: create an RDS PostgreSQL instance whose security group allows port 5432 from the EC2 security group only. Remove the `db` service (and `depends_on`) from `docker-compose.yml`, and set the backend's `SPRING_DATASOURCE_URL=jdbc:postgresql://<rds-endpoint>:5432/taskdb` plus the RDS username/password.
-
-**Update the deployed app**
-```bash
-cd ~/cloud-task-manager && git pull && docker compose up -d --build
-docker image prune -f
-```
-If you change `VITE_API_BASE_URL`, rebuild the frontend: `docker compose build --no-cache frontend && docker compose up -d`.
-
-## Cloud architecture summary
-- **Compute**: one EC2 instance, three containers on a private Docker network.
-- **Network**: only ports 80 (UI) and 8080 (API) are public; PostgreSQL is reachable only from the backend container.
-- **Data**: PostgreSQL data lives in the `pgdata` Docker volume (or RDS for managed backups).
-- **Config**: all secrets and URLs come from environment variables; nothing is hardcoded.
-- **CI**: GitHub Actions validates every change before deploying.
+Tests run using an in-memory H2 database with Kafka producer/consumer components mocked or tested in isolation. No running Kafka instance or PostgreSQL is required for unit test execution.

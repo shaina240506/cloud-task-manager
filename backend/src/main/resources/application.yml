@@ -9,6 +9,21 @@ spring:
     open-in-view: false
     hibernate:
       ddl-auto: update
+  kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      group-id: task-manager-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
 app:
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS}
+  kafka:
+    topic: ${KAFKA_TOPIC:task-events}
+
